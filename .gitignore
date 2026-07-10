@@ -1,0 +1,19 @@
+# kernel module build artifacts
+*.o
+*.cmd
+*.mod
+*.mod.c
+.tmp_versions/
+modules.order
+Module.symvers
+.tmp_*
+
+# don't commit firmware blobs into the tree (release-asset only)
+firmware/*.bin
+firmware/*.txt
+firmware/*.tar.gz
+
+# editor/os
+*~
+.*.swp
+.DS_Store

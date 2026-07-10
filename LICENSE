@@ -1,0 +1,25 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 2, June 1991
+
+ Copyright (C) 1989, 1991 Free Software Foundation, Inc.
+ 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+
+ Everyone is permitted to copy and distribute verbatim copies of this license
+ document, but changing it is not allowed.
+
+                            Preamble
+
+  The licenses for most software are designed to take away your freedom to
+share and change it.  By contrast, the GNU General Public License is intended
+to guarantee your freedom to share and change free software--to make sure the
+software is free for all its users.
+
+[Full GPL-2.0 text: https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt]
+
+This package:
+- driver/ (AIC8800 SDIO kernel modules, ported from LYU4662/aic8800-sdio-linux-1.0) — GPL-2.0,
+  inherits the upstream driver's LICENSE.
+- ap-config/, docs/, README, scripts — GPL-2.0.
+- firmware/ — NOT licensed by this project; firmware blobs are proprietary binaries of
+  the chip vendor (AICSEMI/ArtinChip). Distributed only as a convenience GitHub Release
+  asset; if you are the vendor and object, open an issue for removal.
