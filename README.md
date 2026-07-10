@@ -30,8 +30,8 @@ for clients. Expected throughput is ~70-90 Mbps down (the 1T1R SDIO PHY ceiling 
 bug; use a 2×2 USB dongle for more).
 
 ```bash
-git clone https://github.com/<you>/armbian-aic8800d40-wifi
-cd armbian-aic8800d40-wifi
+git clone https://github.com/skvarovski/Armbian-aic8800D40-wifi-driver-kernel-6.18
+cd Armbian-aic8800D40-wifi-driver-kernel-6.18
 # 1. download the firmware release-asset and extract it into firmware/
 # 2. install (defaults: SSID=AIC8800D40-AP, password=ChangeMe12345, channel 36)
 ./ap-config/INSTALL.sh
@@ -81,7 +81,7 @@ Requirements: your box already runs an ophub 6.18.37 Armbian, has the kernel hea
 `apt install hostapd dnsmasq`.
 
 ```bash
-git clone <this repo> && cd armbian-aic8800d40-wifi
+git clone https://github.com/skvarovski/Armbian-aic8800D40-wifi-driver-kernel-6.18 && cd Armbian-aic8800D40-wifi-driver-kernel-6.18
 # Firmware: download the latest Release asset (aic8800D40-firmware.tar.gz),
 #           extract into ./firmware/ so the .bin files sit there.
 #           Verify: sha256sum -c firmware/SHA256SUMS

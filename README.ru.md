@@ -30,8 +30,8 @@
 для большего используйте 2×2 USB-свисток).
 
 ```bash
-git clone https://github.com/<you>/armbian-aic8800d40-wifi
-cd armbian-aic8800d40-wifi
+git clone https://github.com/skvarovski/Armbian-aic8800D40-wifi-driver-kernel-6.18
+cd Armbian-aic8800D40-wifi-driver-kernel-6.18
 # 1. скачать firmware из Release и распаковать в firmware/
 # 2. установка (дефолты: SSID=AIC8800D40-AP, пароль=ChangeMe12345, канал 36)
 ./ap-config/INSTALL.sh
@@ -81,7 +81,7 @@ SDIO-шина сама по себе исправна.
 для `apt install hostapd dnsmasq`.
 
 ```bash
-git clone <этот репо> && cd armbian-aic8800d40-wifi
+git clone https://github.com/skvarovski/Armbian-aic8800D40-wifi-driver-kernel-6.18 && cd Armbian-aic8800D40-wifi-driver-kernel-6.18
 # Firmware: скачать последний Release-asset (aic8800D40-firmware.tar.gz),
 #           распаковать в ./firmware/ (чтобы .bin лежали там).
 #           Сверка: sha256sum -c firmware/SHA256SUMS
