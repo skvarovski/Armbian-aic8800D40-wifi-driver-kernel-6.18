@@ -18,6 +18,17 @@ Fix = three things:
    guide if you prefer.
 3. A 5 GHz regulatory domain (RU works) + `hostapd` for the AC WPA2 AP.
 
+> **⚠️ Known gotcha (handled automatically by `INSTALL.sh`):** on a stock Armbian/Debian
+> image the system `wpa_supplicant` grabs `wlan0` before `hostapd`, so the AP starts then
+> stops ~1 ms later and never serves clients. `INSTALL.sh` masks `wpa_supplicant` and
+> installs a `hostapd` retry drop-in, so the AP comes up and holds. It also sets up DHCP,
+> DNS, and NAT, so clients get internet. If you configure manually, see
+> [docs/ROOT-CAUSE.md §AP bring-up gotchas](docs/ROOT-CAUSE.md).
+
+**Result:** a working 5 GHz 802.11ac WPA2 access point — DHCP, DNS, and NAT internet
+for clients. Expected throughput is ~70-90 Mbps down (the 1T1R SDIO PHY ceiling — not a
+bug; use a 2×2 USB dongle for more).
+
 ```bash
 git clone https://github.com/<you>/armbian-aic8800d40-wifi
 cd armbian-aic8800d40-wifi
@@ -78,8 +89,10 @@ SSID=MyAP PASS=ChangeMe12345 CHANNEL=36 AP_IP=192.168.43.1 ./ap-config/INSTALL.s
 ```
 
 `INSTALL.sh` is idempotent. It installs the prebuilt modules for `6.18.37-ophub`, places the
-firmware on all paths the loader searches, sets regdom RU, installs hostapd/dnsmasq, enables the
-boot services, and starts the AP. After it: `iw dev wlan0` should show `type AP`.
+firmware on all paths the loader searches, sets regdom RU, installs hostapd/dnsmasq, masks
+`wpa_supplicant`, disables `systemd-resolved`, installs the hostapd retry drop-in + NAT script,
+sets up DHCP+DNS+NAT, and starts the AP. After it: `iw dev wlan0` should show `type AP`, and
+clients should get DHCP + DNS + internet.
 
 > Different kernel? The prebuilt `.ko` only matches `6.18.37-ophub` (vermagic). For any other
 > kernel, rebuild the driver from source — see [docs/BUILD-DRIVER.md](docs/BUILD-DRIVER.md).
@@ -110,8 +123,9 @@ Defaults (override via env to `INSTALL.sh` or edit `/etc/hostapd/hostapd.conf` a
 | Mode | 802.11ac (HT40, WPA2-PSK/CCMP) |
 | AP IP / DHCP | `192.168.43.1/24`, DHCP `.10–.50` |
 
-This only brings up the **WiFi AP**. Internet routing / NAT / a captive portal are out of scope —
-add your own (`iptables` MASQUERADE, dnsmasq upstream, etc.) as needed.
+This brings up the **WiFi AP with full client internet**: DHCP + DNS via `dnsmasq`
+(forwarding to `1.1.1.1` / `8.8.8.8`), and NAT via `iptables` MASQUERADE (WAN detected
+dynamically). A captive portal is out of scope — add your own if you need one.
 
 ## Contents
 
@@ -121,7 +135,7 @@ driver/patches/                  # the 6.18 port (cfg80211 wdev, timer API, 150 
 driver/build.sh                  # rebuild for your kernel from upstream LYU4662 + patches
 firmware/SHA256SUMS              # verify the Release firmware asset
 firmware/FIRMWARE-EXTRACTION.md # extract the firmware from your own Android dump
-ap-config/                       # hostapd.conf, dnsmasq, boot services, INSTALL.sh
+ap-config/                       # hostapd.conf, dnsmasq, NAT script, hostapd retry drop-in, INSTALL.sh
 docs/                            # ROOT-CAUSE, BUILD-DRIVER, TROUBLESHOOTING
 ```
 

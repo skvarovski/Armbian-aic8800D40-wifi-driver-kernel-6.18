@@ -18,6 +18,17 @@
    извлечению.
 3. Регуляторный домен 5 ГГц (RU работает) + `hostapd` для AC WPA2 AP.
 
+> **⚠️ Известный готч (автоматически закрывается `INSTALL.sh`):** на штатном образе
+> Armbian/Debian системный `wpa_supplicant` перехватывает `wlan0` раньше `hostapd` — AP
+> стартует и тут же (~1 мс) останавливается, клиентов не обслуживает. `INSTALL.sh` маскирует
+> `wpa_supplicant` и ставит drop-in для авто-рестарта `hostapd`, так что AP поднимается и
+> держится. Также поднимается DHCP, DNS и NAT — клиенты получают интернет. При ручной
+> настройке см. [docs/ROOT-CAUSE.md §AP bring-up gotchas](docs/ROOT-CAUSE.md).
+
+**Результат:** рабочая точка доступа 5 ГГц 802.11ac WPA2 — DHCP, DNS и NAT-интернет для
+клиентов. Ожидаемая скорость ~70-90 Мбит/с на приём (потолок 1T1R SDIO PHY — это не баг;
+для большего используйте 2×2 USB-свисток).
+
 ```bash
 git clone https://github.com/<you>/armbian-aic8800d40-wifi
 cd armbian-aic8800d40-wifi
@@ -78,8 +89,10 @@ SSID=MyAP PASS=ChangeMe12345 CHANNEL=36 AP_IP=192.168.43.1 ./ap-config/INSTALL.s
 ```
 
 `INSTALL.sh` идемпотентен: ставит prebuilt-модули под `6.18.37-ophub`, раскладывает firmware по всем
-путям загрузчика, выставляет regdom RU, ставит hostapd/dnsmasq, включает boot-сервисы и стартует AP.
-После: `iw dev wlan0` покажет `type AP`.
+путям загрузчика, выставляет regdom RU, ставит hostapd/dnsmasq, маскирует `wpa_supplicant`,
+отключает `systemd-resolved`, ставит drop-in для авто-рестарта hostapd + NAT-скрипт, настраивает
+DHCP+DNS+NAT и стартует AP. После: `iw dev wlan0` покажет `type AP`, а клиенты получат DHCP + DNS +
+интернет.
 
 > Другое ядро? Prebuilt `.ko` совпадает только с `6.18.37-ophub` (vermagic). Под любое другое ядро —
 > пересоберите драйвер из исходников: [docs/BUILD-DRIVER.md](docs/BUILD-DRIVER.md).
@@ -110,8 +123,9 @@ SSID=MyAP PASS=ChangeMe12345 CHANNEL=36 AP_IP=192.168.43.1 ./ap-config/INSTALL.s
 | Режим | 802.11ac (HT40, WPA2-PSK/CCMP) |
 | IP AP / DHCP | `192.168.43.1/24`, DHCP `.10–.50` |
 
-Пакет поднимает только **WiFi AP**. Маршрутизация/NAT/портал в интернет — out of scope, добавляйте
-своё (`iptables` MASQUERADE, dnsmasq upstream и т.п.).
+Пакет поднимает **WiFi AP с полным интернетом для клиентов**: DHCP + DNS через `dnsmasq`
+(forward на `1.1.1.1` / `8.8.8.8`), NAT через `iptables` MASQUERADE (WAN определяется динамически).
+Каптивный портал — out of scope, добавляйте свой при необходимости.
 
 ## Состав
 
@@ -121,7 +135,7 @@ driver/patches/                  # порт на 6.18 (cfg80211 wdev, timer API,
 driver/build.sh                  # пересборка под своё ядро (upstream LYU4662 + патчи)
 firmware/SHA256SUMS              # сверка Release-asset'а firmware
 firmware/FIRMWARE-EXTRACTION.md # извлечение firmware из своего Android-дампа
-ap-config/                       # hostapd.conf, dnsmasq, boot-сервисы, INSTALL.sh
+ap-config/                       # hostapd.conf, dnsmasq, NAT-скрипт, hostapd retry drop-in, INSTALL.sh
 docs/                            # ROOT-CAUSE, BUILD-DRIVER, TROUBLESHOOTING
 ```
 
