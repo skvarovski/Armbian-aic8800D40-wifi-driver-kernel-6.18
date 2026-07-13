@@ -67,6 +67,20 @@ depmod -a || true
 printf 'aic8800_bsp\naic8800_fdrv\n' > /etc/modules-load.d/aic8800.conf
 ok "driver autoload enabled"
 
+# ─── AIC8800 debug-spam fix (aicwf_dbg_level=3) ──────────────────────────────
+# Default 15 floods the kernel log ~400+/min with LOGTRACE rwnx_cmd_malloc/free (every TX
+# command). Level 3 = LOGERROR|LOGINFO (quiet). Read at module_init → effective after reboot
+# or `modprobe -r aic8800_fdrv && modprobe aic8800_fdrv`. Residual bare-printk
+# rwnx_tx "Power Save" (~2/s) is NOT gated by this level (harmless, journal only).
+mkdir -p /etc/modprobe.d
+cat > /etc/modprobe.d/aic8800-dbg.conf <<'DBG'
+options aic8800_fdrv aicwf_dbg_level=3
+DBG
+# apply at runtime too if the parameter is writable
+[ -w /sys/module/aic8800_fdrv/parameters/aicwf_dbg_level ] && \
+  echo 3 > /sys/module/aic8800_fdrv/parameters/aicwf_dbg_level 2>/dev/null || true
+ok "aicwf_dbg_level=3 (debug spam quieted; full effect after reboot)"
+
 # ─── DTB mmc1 max-frequency → 25 MHz (root cause of `sunxi-mmc data error`) ───
 # If the DTB allows 150 MHz, the controller runs the SDIO bus at 50 MHz and the
 # firmware upload corrupts → no wlan0. Cap the WiFi slot at 25 MHz. See

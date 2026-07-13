@@ -52,6 +52,22 @@ These are Linux AP issues, not AIC8800/firmware issues — but they're the commo
    then `ping 1.1.1.1`. The first failing step tells you AP / DNS / NAT
    respectively.
 
+## The kernel log is flooded with `AICWFDBG(LOGTRACE) rwnx_cmd_malloc/free` (harmless, noisy)
+The driver defaults to `aicwf_dbg_level=15` (LOGERROR|LOGINFO|LOGTRACE|LOGDEBUG), which logs every
+TX command alloc/free — ~400+ lines/min in `journalctl -k`. It's harmless (journal only; doesn't
+hit the console if your printk loglevel is low), but fills the log fast. `INSTALL.sh` sets
+`aicwf_dbg_level=3` (LOGERROR|LOGINFO) automatically via `/etc/modprobe.d/aic8800-dbg.conf`.
+
+To apply without reinstalling:
+```bash
+echo 'options aic8800_fdrv aicwf_dbg_level=3' > /etc/modprobe.d/aic8800-dbg.conf
+# effective after reboot, or reload the module now:
+modprobe -r aic8800_fdrv && modprobe aic8800_fdrv
+# (reloading drops wlan0 briefly; the hostapd retry drop-in brings the AP back)
+```
+Residual: a bare `printk` in `rwnx_tx.c` ("Power Save", ~2/s) is **not** gated by this level — it
+stays in the journal. It's cosmetic; removing it needs a driver rebuild.
+
 ## "It worked once, then the box locked up / rebooted"
 The AIC8800 driver is an out-of-tree module on a bleeding-edge kernel (6.18). Under AP traffic a
 driver bug can panic the kernel. If it's a one-off, a power-cycle restores it (the boot services
