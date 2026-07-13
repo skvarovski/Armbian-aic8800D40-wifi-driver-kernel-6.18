@@ -67,6 +67,30 @@ depmod -a || true
 printf 'aic8800_bsp\naic8800_fdrv\n' > /etc/modules-load.d/aic8800.conf
 ok "driver autoload enabled"
 
+# ─── DTB mmc1 max-frequency → 25 MHz (root cause of `sunxi-mmc data error`) ───
+# If the DTB allows 150 MHz, the controller runs the SDIO bus at 50 MHz and the
+# firmware upload corrupts → no wlan0. Cap the WiFi slot at 25 MHz. See
+# docs/ROOT-CAUSE.md §"Failure mode B". Reboot required for the DTB change.
+say "DTB patch (mmc1 WiFi → 25 MHz — fixes 'sunxi-mmc data error')"
+CUR_CLOCK="$(awk '/^clock/{print $2}' /sys/kernel/debug/mmc1/ios 2>/dev/null || echo 0)"
+DTB_PATCHED=0
+if [ "${CUR_CLOCK:-0}" -ge 40000000 ]; then
+  command -v dtc >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq device-tree-compiler >/dev/null 2>&1 || true
+  if command -v dtc >/dev/null && [ -f "$HERE/ap-config/aic-dtb-25mhz.sh" ]; then
+    if bash "$HERE/ap-config/aic-dtb-25mhz.sh"; then
+      DTB_PATCHED=1
+      ok "mmc1 capped at 25 MHz — REBOOT REQUIRED before wlan0 will come up"
+    else
+      echo "  ⚠ DTB patch did not apply — see docs/ROOT-CAUSE.md §B. Without it you'll get 'data error'."
+    fi
+  else
+    echo "  ⚠ dtc / aic-dtb-25mhz.sh not available — DTB not patched. If you later see"
+    echo "    'sunxi-mmc data error' in dmesg, run ap-config/aic-dtb-25mhz.sh manually + reboot."
+  fi
+else
+  ok "mmc1 already at ${CUR_CLOCK:-?} Hz (≤ 25 MHz target) — DTB patch not needed"
+fi
+
 # ─── regdom ──────────────────────────────────────────────────────────────────
 say "Regulatory domain (5 GHz AP)"
 cp -f "$HERE/ap-config/regdom-ru.conf" /etc/modprobe.d/regdom-ru.conf
@@ -179,7 +203,18 @@ if grep -rqE '^\s*port\s*=\s*0' /etc/dnsmasq.d/ 2>/dev/null; then
   echo "  Move or fix them (see docs/TROUBLESHOOTING.md 'DNS disabled')."
 fi
 systemctl enable dnsmasq.service >/dev/null 2>&1 || true
-ok "dnsmasq configured + enabled"
+# dnsmasq drop-in: After=hostapd + Restart. Without it dnsmasq can start before
+# wlan0 exists (AIC8800 probes late) → "unknown interface wlan0" → DHCP dead after reboot.
+mkdir -p /etc/systemd/system/dnsmasq.service.d
+cat > /etc/systemd/system/dnsmasq.service.d/after-hostapd.conf <<'DM'
+[Unit]
+After=hostapd.service
+Wants=hostapd.service
+[Service]
+Restart=on-failure
+RestartSec=5
+DM
+ok "dnsmasq configured + enabled (After=hostapd, Restart=on-failure)"
 
 # ─── sysctl: enable IPv4 forwarding (persist) ────────────────────────────────
 say "Enable IPv4 forwarding"
@@ -199,6 +234,14 @@ systemctl restart hostapd 2>/dev/null || true
 sleep 3
 
 say "Done. Verify:"
+if [ "$DTB_PATCHED" = 1 ]; then
+  echo ""
+  echo "    ⚠ DTB was patched (mmc1 → 25 MHz). REBOOT FIRST, then verify:"
+  echo "        systemctl reboot"
+  echo "        # after reboot: cat /sys/kernel/debug/mmc1/ios | grep clock  → 25000000 Hz"
+  echo "        #               dmesg | grep -E 'data error|sdio ready'      → 0 errors, ready=1"
+  echo ""
+fi
 echo "    iw dev wlan0 info            # expect: type AP, ssid $SSID, channel $CHANNEL (5 GHz)"
 echo "    systemctl is-active hostapd dnsmasq"
 echo "    ip addr show wlan0           # expect AP IP $AP_IP/24 (set by hostapd ExecStartPost)"
@@ -208,4 +251,5 @@ echo "    Speed check: expect ~70-90 Mbps down (1T1R SDIO ceiling). Not a bug."
 echo ""
 echo "    GOTCHA: if DNS fails, check ALL files in /etc/dnsmasq.d/ for a 'port=0' line"
 echo "    (incl. backups — dnsmasq loads every file there). See docs/TROUBLESHOOTING.md."
-iw dev wlan0 info 2>/dev/null | grep -E 'type|ssid|channel' || echo "(wlan0 not yet up — check dmesg | grep -E 'aic|rd_version')"
+echo "    GOTCHA: 'sunxi-mmc data error' in dmesg → DTB clock too high → ap-config/aic-dtb-25mhz.sh + reboot"
+iw dev wlan0 info 2>/dev/null | grep -E 'type|ssid|channel' || echo "(wlan0 not yet up — check dmesg | grep -E 'aic|rd_version|data error')"

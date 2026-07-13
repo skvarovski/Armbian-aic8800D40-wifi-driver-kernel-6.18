@@ -6,24 +6,27 @@
 
 ## TL;DR
 
-The chip works. The stock Armbian/ophub image ships the **wrong firmware** for the AIC8800D40
-revision on these boards — the firmware upload completes but the chip never boots
-(`rd_version=00000000`, `8800d80 wifi start fail`). It is **not** a sunxi-mmc / kernel issue.
+The chip works. A clean Armbian/ophub image fails to bring up `wlan0` for **three independent
+reasons** — each with its own `dmesg` signature, all must be fixed:
 
-Fix = three things:
-1. The **AIC8800 SDIO driver**, ported to the 6.18 kernel, with the SDIO clock forced to **150 MHz**
-   (the chip revision on these boards fails at the driver's default 50/25 MHz).
-2. The **correct firmware** — the device's own original Android firmware (`fmacfw_8800d80_u02.bin`
-   and the rest of the set). Provided as a [GitHub Release asset](#firmware), with a self-extraction
-   guide if you prefer.
-3. A 5 GHz regulatory domain (RU works) + `hostapd` for the AC WPA2 AP.
+1. **Wrong firmware blob** — the stock firmware uploads but never boots
+   (`rd_version=00000000`, `8800d80 wifi start fail`, **no** `data error`). Fix: the device's own
+   Android firmware (`fmacfw_8800d80_u02.bin` md5 `48c3e1db`).
+2. **DTB `mmc1 max-frequency` too high (150 MHz)** — the ophub Vontar-H618 device tree lets the
+   SDIO bus run at 50 MHz, which corrupts the firmware upload (`sunxi-mmc: data error`). This is
+   the real "sunxi-mmc" cause — **not** controller tuning. Fix: cap mmc1 at **25 MHz**
+   (`ap-config/aic-dtb-25mhz.sh`). (The driver's `FEATURE_SDIO_CLOCK=150` is just a *request*; the
+   DTB is the real lever, and 25 MHz is the working frequency.)
+3. **No driver** — the AIC8800 SDIO driver is out-of-tree and absent from a clean ophub image.
+   Fix: the ported driver (prebuilt for `6.18.37-ophub`, or rebuild).
 
-> **⚠️ Known gotcha (handled automatically by `INSTALL.sh`):** on a stock Armbian/Debian
-> image the system `wpa_supplicant` grabs `wlan0` before `hostapd`, so the AP starts then
-> stops ~1 ms later and never serves clients. `INSTALL.sh` masks `wpa_supplicant` and
-> installs a `hostapd` retry drop-in, so the AP comes up and holds. It also sets up DHCP,
-> DNS, and NAT, so clients get internet. If you configure manually, see
-> [docs/ROOT-CAUSE.md §AP bring-up gotchas](docs/ROOT-CAUSE.md).
+Plus a 5 GHz regulatory domain (RU) + `hostapd` for the AC WPA2 AP.
+
+> **⚠️ Known gotchas (handled automatically by `INSTALL.sh`):**
+> - **`sunxi-mmc data error`** on a clean install = DTB clock too high → `aic-dtb-25mhz.sh` + reboot.
+> - System **`wpa_supplicant`** grabs `wlan0` before `hostapd`; **hostapd is masked** on Debian by
+>   default; **AIC8800 HT40 scan** fails → use HT20. `INSTALL.sh` handles all of these and sets up
+>   DHCP/DNS/NAT. For manual config, see [docs/ROOT-CAUSE.md](docs/ROOT-CAUSE.md).
 
 **Result:** a working 5 GHz 802.11ac WPA2 access point — DHCP, DNS, and NAT internet
 for clients. Expected throughput is ~70-90 Mbps down (the 1T1R SDIO PHY ceiling — not a
@@ -42,25 +45,39 @@ iw dev wlan0          # → interface wlan0, type AP, ssid AIC8800D40-AP, 5 GHz
 
 ## Symptoms (you probably arrived here from a search)
 
+**Mode A — wrong firmware** (`rd_version=0`, no `data error`):
 ```
 aicbsp: aicbsp_sdio_probe:1 vid:0xC8A1  did:0x0082
 aicbsp: aicbsp_driver_fw_init, chip rev: 7
 rwnx_load_firmware :firmware path = .../fmacfw_8800d80_u02.bin
 rd_version_val=00000000
-8800d80 wifi start fail          # ← with the stock firmware
+8800d80 wifi start fail          # ← with the stock firmware blob
 ```
-No `wlan0`, no AP. The driver loads, the chip enumerates, the firmware file is found and uploaded,
-but the chip never reports a version — i.e. the firmware didn't boot. No `sunxi-mmc data error` is
-logged; the SDIO bus itself is fine.
+
+**Mode B — DTB SDIO clock too high** (`data error`, happens on a clean ophub install once the
+firmware is correct):
+```
+aicbsp_driver_fw_init, chip rev: 7
+rwnx_load_firmware :firmware path = .../fw_patch_table_8800d80_u02.bin
+sunxi-mmc 4021000.mmc: data error, sending stop command   ← bus at 50 MHz, transfer corrupts
+aicwf_sdio_send_pkt fail-110
+```
+
+In both: no `wlan0`, no AP. Mode A = firmware didn't boot (file is wrong). Mode B = the SDIO
+transfer itself corrupted (bus too fast). Different causes, different fixes — see below.
 
 ## Root cause
 
-* **Wrong firmware blob.** The `fmacfw_8800d80_u02.bin` shipped in Armbian/ophub firmware packages
-  does not boot this silicon revision (`chip rev: 7`). The chip's own original Android firmware
-  boots it. The firmware **file names** carry `d80` in them — that's the vendor/driver naming
-  convention (the driver serves this chip through that path); the **chip** is the AIC8800D40.
-* **SDIO clock.** The driver defaults to 50 MHz (or 25 MHz in some trees). This chip revision
-  (rev 7) needs **150 MHz**; at 50/25 MHz the bring-up fails.
+* **Wrong firmware blob** (mode A). The `fmacfw_8800d80_u02.bin` shipped in Armbian/ophub firmware
+  packages does not boot this silicon revision (`chip rev: 7`). The chip's own original Android
+  firmware boots it. The firmware **file names** carry `d80` — that's the vendor/driver naming
+  convention; the **chip** is the AIC8800D40.
+* **DTB `mmc1 max-frequency` too high** (mode B). The ophub Vontar-H618 device tree sets the WiFi
+  SDIO slot to 150 MHz. The driver requests 150, the controller runs the bus at **50 MHz** (SD
+  high-speed), and large firmware transfers corrupt → `sunxi-mmc: data error`. Capping mmc1 at
+  **25 MHz** makes them clean. (The driver's `FEATURE_SDIO_CLOCK=150` is a request, not a hard
+  setting — `min(DTB max-frequency, request)` is what actually runs; 25 MHz is the working value.)
+* **No driver** — out-of-tree, absent from a clean ophub image. Nothing probes the chip.
 
 Detailed write-up → [docs/ROOT-CAUSE.md](docs/ROOT-CAUSE.md). Symptom→diagnosis table →
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
@@ -120,7 +137,7 @@ Defaults (override via env to `INSTALL.sh` or edit `/etc/hostapd/hostapd.conf` a
 | SSID | `AIC8800D40-AP` |
 | WPA2 passphrase | `ChangeMe12345` |
 | Band / channel | 5 GHz / 36 |
-| Mode | 802.11ac (HT40, WPA2-PSK/CCMP) |
+| Mode | 802.11ac (HT20, WPA2-PSK/CCMP) — HT40 scan fails on AIC8800, see [ROOT-CAUSE.md §3](docs/ROOT-CAUSE.md) |
 | AP IP / DHCP | `192.168.43.1/24`, DHCP `.10–.50` |
 
 This brings up the **WiFi AP with full client internet**: DHCP + DNS via `dnsmasq`
@@ -131,12 +148,13 @@ dynamically). A captive portal is out of scope — add your own if you need one.
 
 ```
 driver/prebuilt-6.18.37-ophub/   # ready aic8800_bsp.ko + aic8800_fdrv.ko (ophub 6.18.37)
-driver/patches/                  # the 6.18 port (cfg80211 wdev, timer API, 150 MHz clock, ...)
+driver/patches/                  # the 6.18 port (cfg80211 wdev, timer API, 150 MHz clock request, ...)
 driver/build.sh                  # rebuild for your kernel from upstream LYU4662 + patches
 firmware/SHA256SUMS              # verify the Release firmware asset
 firmware/FIRMWARE-EXTRACTION.md # extract the firmware from your own Android dump
-ap-config/                       # hostapd.conf, dnsmasq, NAT script, hostapd retry drop-in, INSTALL.sh
-docs/                            # ROOT-CAUSE, BUILD-DRIVER, TROUBLESHOOTING
+ap-config/aic-dtb-25mhz.sh       # ★ DTB patch: mmc1 WiFi 150 MHz → 25 MHz (fixes sunxi-mmc data error)
+ap-config/                        # hostapd.conf (HT20), dnsmasq, NAT, hostapd retry drop-in, INSTALL.sh
+docs/                             # ROOT-CAUSE, BUILD-DRIVER, TROUBLESHOOTING
 ```
 
 ## Credits & references

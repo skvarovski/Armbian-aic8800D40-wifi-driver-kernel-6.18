@@ -6,24 +6,28 @@
 
 ## TL;DR
 
-Чип рабочий. В штатном образе Armbian/ophub лежит **неправильная firmware** для ревизии AIC8800D40
-на этих платах — заливка firmware проходит, но чип не бутится (`rd_version=00000000`,
-`8800d80 wifi start fail`). Это **не** проблема sunxi-mmc / ядра.
+Чип рабочий. Чистый образ Armbian/ophub не поднимает `wlan0` по **трём независимым причинам** —
+у каждой свой симптом в `dmesg`, чинить надо все:
 
-Фикс = три вещи:
-1. **Драйвер AIC8800 SDIO**, портированный под ядро 6.18, с SDIO-клоком форсированно **150 МГц**
-   (ревизия чипа на этих платах не поднимается на дефолтных 50/25 МГц).
-2. **Правильная firmware** — родная Android-firmware устройства (`fmacfw_8800d80_u02.bin` и весь
-   набор). Выложена как [GitHub Release-asset](#firmware), плюс инструкция по самостоятельному
-   извлечению.
-3. Регуляторный домен 5 ГГц (RU работает) + `hostapd` для AC WPA2 AP.
+1. **Неправильный firmware-блоб** — штатная firmware заливается, но не бутится
+   (`rd_version=00000000`, `8800d80 wifi start fail`, `data error` **нет**). Фикс: родная
+   Android-firmware устройства (`fmacfw_8800d80_u02.bin` md5 `48c3e1db`).
+2. **DTB `mmc1 max-frequency` завышен (150 МГц)** — device-tree ophub Vontar-H618 разрешает
+   SDIO-шине 150 МГц, контроллер поднимает 50 МГц, и заливка firmware ломается
+   (`sunxi-mmc: data error`). Это и есть настоящая причина «sunxi-mmc», **а не** тюнинг
+   контроллера. Фикс: ограничить mmc1 до **25 МГц** (`ap-config/aic-dtb-25mhz.sh`).
+   (`FEATURE_SDIO_CLOCK=150` в драйвере — это *запрос*, а не установка; реальная частота =
+   `min(DTB max-frequency, запрос)`, и 25 МГц — рабочая.)
+3. **Нет драйвера** — AIC8800 SDIO out-of-tree, в чистом ophub-образе отсутствует. Ничто не
+   пробует чип. Фикс: портированный драйвер (prebuilt под `6.18.37-ophub` или пересборка).
 
-> **⚠️ Известный готч (автоматически закрывается `INSTALL.sh`):** на штатном образе
-> Armbian/Debian системный `wpa_supplicant` перехватывает `wlan0` раньше `hostapd` — AP
-> стартует и тут же (~1 мс) останавливается, клиентов не обслуживает. `INSTALL.sh` маскирует
-> `wpa_supplicant` и ставит drop-in для авто-рестарта `hostapd`, так что AP поднимается и
-> держится. Также поднимается DHCP, DNS и NAT — клиенты получают интернет. При ручной
-> настройке см. [docs/ROOT-CAUSE.md §AP bring-up gotchas](docs/ROOT-CAUSE.md).
+Плюс регуляторный домен 5 ГГц (RU) + `hostapd` для AC WPA2 AP.
+
+> **⚠️ Известные готчи (автоматически закрываются `INSTALL.sh`):**
+> - **`sunxi-mmc data error`** на чистой установке = DTB-клок завышен → `aic-dtb-25mhz.sh` + ребут.
+> - Системный **`wpa_supplicant`** перехватывает `wlan0` раньше `hostapd`; **hostapd по умолчанию
+>   masked** в Debian; **HT40-scan на AIC8800 падает** → использовать HT20. `INSTALL.sh` закрывает
+>   всё это и поднимает DHCP/DNS/NAT. Ручная настройка — [docs/ROOT-CAUSE.md](docs/ROOT-CAUSE.md).
 
 **Результат:** рабочая точка доступа 5 ГГц 802.11ac WPA2 — DHCP, DNS и NAT-интернет для
 клиентов. Ожидаемая скорость ~70-90 Мбит/с на приём (потолок 1T1R SDIO PHY — это не баг;
@@ -42,25 +46,38 @@ iw dev wlan0          # → interface wlan0, type AP, ssid AIC8800D40-AP, 5 ГГ
 
 ## Симптомы (вероятно вы сюда попали из поиска)
 
+**Режим A — неправильная firmware** (`rd_version=0`, `data error` нет):
 ```
 aicbsp: aicbsp_sdio_probe:1 vid:0xC8A1  did:0x0082
 aicbsp: aicbsp_driver_fw_init, chip rev: 7
 rwnx_load_firmware :firmware path = .../fmacfw_8800d80_u02.bin
 rd_version_val=00000000
-8800d80 wifi start fail          # ← со штатной firmware
+8800d80 wifi start fail          # ← со штатной firmware-блобом
 ```
-`wlan0` нет, AP нет. Драйвер грузится, чип энумерируется, файл firmware находится и заливается,
-но чип не отдаёт версию — firmware не загрузилась. Ошибок `sunxi-mmc data error` в логе нет;
-SDIO-шина сама по себе исправна.
+
+**Режим B — DTB SDIO-клок завышен** (`data error`; на чистой ophub-установке, когда firmware уже
+правильная):
+```
+aicbsp_driver_fw_init, chip rev: 7
+rwnx_load_firmware :firmware path = .../fw_patch_table_8800d80_u02.bin
+sunxi-mmc 4021000.mmc: data error, sending stop command   ← шина на 50 МГц, передача ломается
+aicwf_sdio_send_pkt fail-110
+```
+
+В обоих случаях: `wlan0` нет, AP нет. Режим A = firmware не бутится (файл не тот). Режим B = сама
+SDIO-передача повредилась (шина слишком быстрая). Разные причины — разные фиксы (см. ниже).
 
 ## Корневая причина
 
-* **Неправильный firmware-блоб.** `fmacfw_8800d80_u02.bin` из пакетов Armbian/ophub не бутит эту
-  ревизию кремния (`chip rev: 7`). Родная Android-firmware устройства — бутит. Имена firmware-файлов
-  содержат `d80` — это нейминг вендора/драйвера (драйвер обслуживает чип через этот путь); сам
-  **чип** — AIC8800D40.
-* **SDIO-клок.** Драйвер по умолчанию ставит 50 МГц (в некоторых деревьях 25 МГц). Эта ревизия
-  (rev 7) требует **150 МГц**; на 50/25 bring-up падает.
+* **Неправильный firmware-блоб** (режим A). `fmacfw_8800d80_u02.bin` из пакетов Armbian/ophub не
+  бутит эту ревизию кремния (`chip rev: 7`). Родная Android-firmware устройства — бутит. Имена
+  firmware-файлов содержат `d80` — нейминг вендора/драйвера; сам **чип** — AIC8800D40.
+* **DTB `mmc1 max-frequency` завышен** (режим B). Device-tree ophub Vontar-H618 ставит WiFi SDIO-слот
+  на 150 МГц. Драйвер просит 150, контроллер поднимает шину на **50 МГц** (SD high-speed), большие
+  firmware-передачи ломаются → `sunxi-mmc: data error`. Ограничение mmc1 до **25 МГц** чинит это.
+  (`FEATURE_SDIO_CLOCK=150` в драйвере — запрос, а не установка; реально крутится
+  `min(DTB max-frequency, запрос)`; 25 МГц — рабочая частота.)
+* **Нет драйвера** — out-of-tree, в чистом ophub-образе отсутствует. Чип никто не пробует.
 
 Подробный разбор → [docs/ROOT-CAUSE.md](docs/ROOT-CAUSE.md). Таблица симптом→диагноз →
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
@@ -120,7 +137,7 @@ DHCP+DNS+NAT и стартует AP. После: `iw dev wlan0` покажет `
 | SSID | `AIC8800D40-AP` |
 | Пароль WPA2 | `ChangeMe12345` |
 | Диапазон / канал | 5 ГГц / 36 |
-| Режим | 802.11ac (HT40, WPA2-PSK/CCMP) |
+| Режим | 802.11ac (HT20, WPA2-PSK/CCMP) — HT40-scan падает на AIC8800, см. [ROOT-CAUSE.md §3](docs/ROOT-CAUSE.md) |
 | IP AP / DHCP | `192.168.43.1/24`, DHCP `.10–.50` |
 
 Пакет поднимает **WiFi AP с полным интернетом для клиентов**: DHCP + DNS через `dnsmasq`
@@ -131,12 +148,13 @@ DHCP+DNS+NAT и стартует AP. После: `iw dev wlan0` покажет `
 
 ```
 driver/prebuilt-6.18.37-ophub/   # готовые aic8800_bsp.ko + aic8800_fdrv.ko (ophub 6.18.37)
-driver/patches/                  # порт на 6.18 (cfg80211 wdev, timer API, клок 150 МГц, ...)
+driver/patches/                  # порт на 6.18 (cfg80211 wdev, timer API, запрос клока 150 МГц, ...)
 driver/build.sh                  # пересборка под своё ядро (upstream LYU4662 + патчи)
 firmware/SHA256SUMS              # сверка Release-asset'а firmware
 firmware/FIRMWARE-EXTRACTION.md # извлечение firmware из своего Android-дампа
-ap-config/                       # hostapd.conf, dnsmasq, NAT-скрипт, hostapd retry drop-in, INSTALL.sh
-docs/                            # ROOT-CAUSE, BUILD-DRIVER, TROUBLESHOOTING
+ap-config/aic-dtb-25mhz.sh       # ★ патч DTB: mmc1 WiFi 150 МГц → 25 МГц (чинит sunxi-mmc data error)
+ap-config/                        # hostapd.conf (HT20), dnsmasq, NAT, hostapd retry drop-in, INSTALL.sh
+docs/                             # ROOT-CAUSE, BUILD-DRIVER, TROUBLESHOOTING
 ```
 
 ## Благодарности и ссылки
